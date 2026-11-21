@@ -22,6 +22,33 @@ def get_cookie_file():
             return tmp_path
     return None
 
+def parse_info(info):
+    formats = []
+    for f in info.get("formats", []):
+        if f.get("url") and f.get("vcodec") != "none" and f.get("acodec") != "none":
+            formats.append({
+                "format_id": f.get("format_id"),
+                "ext": f.get("ext"),
+                "quality": f.get("format_note") or f"{f.get('height', '')}p",
+                "url": f.get("url"),
+            })
+    if not formats:
+        for f in info.get("formats", []):
+            if f.get("url") and f.get("vcodec") != "none":
+                formats.append({
+                    "format_id": f.get("format_id"),
+                    "ext": f.get("ext"),
+                    "quality": f.get("format_note") or f"{f.get('height', '')}p",
+                    "url": f.get("url"),
+                })
+    return {
+        "title": info.get("title"),
+        "thumbnail": info.get("thumbnail"),
+        "duration": info.get("duration"),
+        "direct_url": info.get("url") or (formats[-1]["url"] if formats else None),
+        "formats": formats,
+    }
+
 @app.get("/")
 def home():
     cookie_path = get_cookie_file()
@@ -34,37 +61,42 @@ def home():
 @app.get("/info")
 def get_video_info(url: str = Query(..., description="Video URL")):
     cookie_path = get_cookie_file()
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["tv", "mweb", "web"],
-            }
-        },
-    }
-    if cookie_path:
-        ydl_opts["cookiefile"] = cookie_path
+    last_error = None
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            formats = []
-            for f in info.get("formats", []):
-                if f.get("url") and f.get("vcodec") != "none" and f.get("acodec") != "none":
-                    formats.append({
-                        "format_id": f.get("format_id"),
-                        "ext": f.get("ext"),
-                        "quality": f.get("format_note") or f"{f.get('height', '')}p",
-                        "url": f.get("url"),
-                    })
-            return {
-                "title": info.get("title"),
-                "thumbnail": info.get("thumbnail"),
-                "duration": info.get("duration"),
-                "direct_url": info.get("url") or (formats[-1]["url"] if formats else None),
-                "formats": formats,
-            }
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    attempts = [
+        {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android_vr", "ios"],
+                }
+            },
+        }
+    ]
+
+    if cookie_path:
+        attempts.append({
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "cookiefile": cookie_path,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["tv", "web_safari"],
+                }
+            },
+        })
+
+    for opts in attempts:
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                result = parse_info(info)
+                if result["formats"] or result["direct_url"]:
+                    return result
+        except Exception as e:
+            last_error = str(e)
+
+    raise HTTPException(status_code=400, detail=last_error or "Could not fetch video")
