@@ -45,7 +45,7 @@ def parse_info(info):
         "title": info.get("title"),
         "thumbnail": info.get("thumbnail"),
         "duration": info.get("duration"),
-        "direct_url": info.get("url") or (formats[-1]["url"] if formats else None),
+        "direct_url": formats[-1]["url"] if formats else info.get("url"),
         "formats": formats,
     }
 
@@ -61,20 +61,8 @@ def home():
 @app.get("/info")
 def get_video_info(url: str = Query(..., description="Video URL")):
     cookie_path = get_cookie_file()
-    last_error = None
-
-    attempts = [
-        {
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["android_vr", "ios"],
-                }
-            },
-        }
-    ]
+    errors = []
+    attempts = []
 
     if cookie_path:
         attempts.append({
@@ -84,7 +72,31 @@ def get_video_info(url: str = Query(..., description="Video URL")):
             "cookiefile": cookie_path,
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["tv", "web_safari"],
+                    "player_client": ["tv"],
+                }
+            },
+        })
+
+    attempts.append({
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android_vr"],
+            }
+        },
+    })
+
+    if cookie_path:
+        attempts.append({
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": True,
+            "cookiefile": cookie_path,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["mweb"],
                 }
             },
         })
@@ -97,6 +109,6 @@ def get_video_info(url: str = Query(..., description="Video URL")):
                 if result["formats"] or result["direct_url"]:
                     return result
         except Exception as e:
-            last_error = str(e)
+            errors.append(str(e))
 
-    raise HTTPException(status_code=400, detail=last_error or "Could not fetch video")
+    raise HTTPException(status_code=400, detail=" | ".join(errors) or "Could not fetch video")
