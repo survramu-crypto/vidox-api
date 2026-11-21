@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import yt_dlp
 
-app = FastAPI(title="VidoX Advanced Backend Server", version="2.0.0")
+app = FastAPI(title="VidoX Advanced Backend Server", version="2.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,7 +19,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Simple in-memory TTL cache (3 minutes) for ultra-fast repeat search & feed loads
 CACHE_STORE = {}
 CACHE_TTL_SECONDS = 180
 
@@ -72,63 +71,61 @@ def format_duration(seconds) -> str:
 def parse_info(info: dict) -> dict:
     video_formats = []
     audio_formats = []
-    seen_video_heights = set()
+    seen_video_keys = set()
 
     raw_formats = info.get("formats") or []
 
-    # 1. Combined video+audio formats first (best compatibility for direct download & in-app playback)
-    for f in sorted(raw_formats, key=lambda x: x.get("height") or 0, reverse=True):
+    # 1. ONLY combined video+audio formats (guarantees sound on Instagram & YouTube!)
+    for f in sorted(raw_formats, key=lambda x: (x.get("height") or 0, x.get("tbr") or 0), reverse=True):
         url = f.get("url")
         vcodec = f.get("vcodec")
         acodec = f.get("acodec")
         height = f.get("height")
         if url and vcodec and vcodec != "none" and acodec and acodec != "none":
             label = f"{height}p" if height else (f.get("format_note") or "HD")
-            if label not in seen_video_heights:
-                seen_video_heights.add(label)
+            dedup_key = f"{label}_{f.get('ext')}"
+            if dedup_key not in seen_video_keys:
+                seen_video_keys.add(dedup_key)
                 video_formats.append({
                     "format_id": f.get("format_id"),
                     "ext": f.get("ext") or "mp4",
                     "quality": label,
+                    "has_audio": True,
                     "height": height or 0,
                     "filesize": f.get("filesize") or f.get("filesize_approx"),
                     "url": url,
                 })
 
-    # 2. Fallback to video-only streams if needed
-    if not video_formats:
-        for f in sorted(raw_formats, key=lambda x: x.get("height") or 0, reverse=True):
-            url = f.get("url")
-            vcodec = f.get("vcodec")
-            height = f.get("height")
-            if url and vcodec and vcodec != "none":
-                label = f"{height}p" if height else (f.get("format_note") or "Video")
-                if label not in seen_video_heights:
-                    seen_video_heights.add(label)
-                    video_formats.append({
-                        "format_id": f.get("format_id"),
-                        "ext": f.get("ext") or "mp4",
-                        "quality": label,
-                        "height": height or 0,
-                        "filesize": f.get("filesize") or f.get("filesize_approx"),
-                        "url": url,
-                    })
+    # 2. If top-level info already has a direct combined URL (common on Instagram Reels)
+    if not video_formats and info.get("url") and info.get("vcodec") != "none":
+        video_formats.append({
+            "format_id": info.get("format_id") or "best",
+            "ext": info.get("ext") or "mp4",
+            "quality": f"{info.get('height')}p" if info.get("height") else "HD",
+            "has_audio": True,
+            "height": info.get("height") or 720,
+            "filesize": info.get("filesize") or info.get("filesize_approx"),
+            "url": info.get("url"),
+        })
 
     # 3. Audio-only streams (for MP3 / M4A / AAC options)
+    seen_abr = set()
     for f in sorted(raw_formats, key=lambda x: x.get("abr") or 0, reverse=True):
         url = f.get("url")
         vcodec = f.get("vcodec")
         acodec = f.get("acodec")
         if url and (not vcodec or vcodec == "none") and acodec and acodec != "none":
             abr = int(f.get("abr") or 128)
-            audio_formats.append({
-                "format_id": f.get("format_id"),
-                "ext": f.get("ext") or "m4a",
-                "quality": f"{abr}kbps",
-                "abr": abr,
-                "filesize": f.get("filesize") or f.get("filesize_approx"),
-                "url": url,
-            })
+            if abr not in seen_abr:
+                seen_abr.add(abr)
+                audio_formats.append({
+                    "format_id": f.get("format_id"),
+                    "ext": f.get("ext") or "m4a",
+                    "quality": f"{abr}kbps",
+                    "abr": abr,
+                    "filesize": f.get("filesize") or f.get("filesize_approx"),
+                    "url": url,
+                })
 
     best_direct_url = (
         video_formats[0]["url"]
@@ -138,9 +135,9 @@ def parse_info(info: dict) -> dict:
 
     return {
         "id": info.get("id"),
-        "title": info.get("title") or "VidoX_Media",
+        "title": info.get("title") or "VidMax_Media",
         "thumbnail": info.get("thumbnail"),
-        "channel": info.get("uploader") or info.get("channel") or "YouTube",
+        "channel": info.get("uploader") or info.get("channel") or "Creator",
         "duration": info.get("duration"),
         "duration_text": format_duration(info.get("duration")),
         "direct_url": best_direct_url,
@@ -201,7 +198,7 @@ def home():
     return {
         "status": "online",
         "service": "VidoX API",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "pot_server_alive": is_pot_server_alive(),
         "endpoints": ["/", "/search", "/feed", "/info", "/stream"],
     }
@@ -226,7 +223,6 @@ def search_videos(
         start_idx = (page - 1) * limit
         paged_items = all_items[start_idx : start_idx + limit]
         if not paged_items and page == 1 and latest:
-            # Fallback to standard search if upload-date filter returns empty
             all_items = run_yt_search(clean_q, count=limit, latest=False)
             paged_items = all_items[:limit]
 
@@ -319,7 +315,7 @@ def get_home_feed(
 @app.get("/info")
 def get_video_info(url: str = Query(..., description="Video URL")):
     clean_url = url.strip()
-    cache_key = f"info:{clean_url}"
+    cache_key = f"info_v2:{clean_url}"
     cached = get_cached(cache_key)
     if cached:
         return cached
@@ -334,27 +330,55 @@ def get_video_info(url: str = Query(..., description="Video URL")):
         "noplaylist": True,
         "nocheckcertificate": True,
         "geo_bypass": True,
+        # Prefer combined video+audio formats so Instagram & YouTube always have sound
+        "format": "best[acodec!=none][vcodec!=none]/best",
     }
 
     attempts = []
 
     if is_youtube:
+        # 1. TV + Web Safari with PO Token server + cookies (highest success on cloud IPs)
         if cookie_path:
             attempts.append({
                 **base_opts,
                 "cookiefile": cookie_path,
-                "extractor_args": {"youtube": {"player_client": ["web", "mweb"]}},
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": ["tv", "web_safari"],
+                        "po_token": ["web+http://127.0.0.1:4416"],
+                    }
+                },
             })
+        # 2. TV + Web Safari with PO Token server (no cookies)
         attempts.append({
             **base_opts,
-            "extractor_args": {"youtube": {"player_client": ["web", "mweb"]}},
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["tv", "web_safari"],
+                }
+            },
         })
-        attempts.append({**base_opts})
+        # 3. Android VR / iOS / MWeb client bypasses bot check on many datacenter IPs
         attempts.append({
             **base_opts,
-            "extractor_args": {"youtube": {"player_client": ["mweb", "tv_embedded"]}},
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["android_vr", "ios", "mweb"],
+                }
+            },
         })
+        if cookie_path:
+            attempts.append({
+                **base_opts,
+                "cookiefile": cookie_path,
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": ["mweb", "web"],
+                    }
+                },
+            })
     else:
+        # Instagram / Facebook / Other platforms
         attempts.append({**base_opts})
         if cookie_path:
             attempts.append({**base_opts, "cookiefile": cookie_path})
@@ -364,18 +388,19 @@ def get_video_info(url: str = Query(..., description="Video URL")):
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(clean_url, download=False)
                 parsed = parse_info(info)
-                set_cached(cache_key, parsed)
-                return parsed
+                if parsed.get("formats") or parsed.get("direct_url"):
+                    set_cached(cache_key, parsed)
+                    return parsed
         except Exception as e:
             errors.append(str(e))
 
-    raise HTTPException(status_code=400, detail=" | ".join(errors))
+    raise HTTPException(status_code=400, detail=" | ".join(errors) if errors else "No playable formats found")
 
 
 @app.get("/stream")
 def proxy_media_stream(
     media_url: str = Query(..., description="Direct media stream URL"),
-    filename: str = Query("VidoX_Download.mp4", description="Download file name"),
+    filename: str = Query("VidMax_Download.mp4", description="Download file name"),
 ):
     try:
         req = urllib.request.Request(
@@ -384,12 +409,13 @@ def proxy_media_stream(
                 "User-Agent": (
                     "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 "
                     "(KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
-                )
+                ),
+                "Referer": "https://www.instagram.com/",
             },
         )
-        remote = urllib.request.urlopen(req, timeout=20)
-        content_type = remote.headers.get("Content-Type", "application/octet-stream")
-        safe_name = "".join(c for c in filename if c.isalnum() or c in "._- ") or "VidoX_Download.mp4"
+        remote = urllib.request.urlopen(req, timeout=25)
+        content_type = remote.headers.get("Content-Type", "video/mp4")
+        safe_name = "".join(c for c in filename if c.isalnum() or c in "._- ") or "VidMax_Download.mp4"
 
         def iterfile():
             try:
