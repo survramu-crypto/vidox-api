@@ -38,6 +38,11 @@ def get_video_info(url: str = Query(..., description="Video URL")):
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["tv", "mweb", "web"],
+            }
+        },
     }
     if cookie_path:
         ydl_opts["cookiefile"] = cookie_path
