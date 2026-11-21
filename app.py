@@ -1,4 +1,5 @@
 import os
+import shutil
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
@@ -14,9 +15,11 @@ app.add_middleware(
 )
 
 def get_cookie_file():
-    for path in ["cookies.txt", "/etc/secrets/cookies.txt"]:
+    for path in ["/etc/secrets/cookies.txt", "cookies.txt"]:
         if os.path.exists(path) and os.path.getsize(path) > 0:
-            return path
+            tmp_path = "/tmp/cookies.txt"
+            shutil.copyfile(path, tmp_path)
+            return tmp_path
     return None
 
 @app.get("/")
