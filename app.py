@@ -14,6 +14,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 def get_cookie_file():
     for path in ["/etc/secrets/cookies.txt", "cookies.txt"]:
         if os.path.exists(path) and os.path.getsize(path) > 0:
@@ -21,6 +22,7 @@ def get_cookie_file():
             shutil.copyfile(path, tmp_path)
             return tmp_path
     return None
+
 
 def parse_info(info):
     formats = []
@@ -45,9 +47,10 @@ def parse_info(info):
         "title": info.get("title"),
         "thumbnail": info.get("thumbnail"),
         "duration": info.get("duration"),
-        "direct_url": formats[-1]["url"] if formats else info.get("url"),
+        "direct_url": formats[0]["url"] if formats else info.get("url"),
         "formats": formats,
     }
+
 
 @app.get("/")
 def home():
@@ -55,8 +58,9 @@ def home():
     return {
         "status": "online",
         "service": "VidoX API",
-        "youtube_cookies_loaded": cookie_path is not None
+        "youtube_cookies_loaded": cookie_path is not None,
     }
+
 
 @app.get("/info")
 def get_video_info(url: str = Query(..., description="Video URL")):
@@ -64,28 +68,57 @@ def get_video_info(url: str = Query(..., description="Video URL")):
     errors = []
     attempts = []
 
-    if cookie_path:
-        attempts.append({
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "cookiefile": cookie_path,
-        })
-
-    attempts.append({
+    base_opts = {
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
+        "nocheckcertificate": True,
+        "geo_bypass": True,
+    }
+
+    if cookie_path:
+        attempts.append({
+            **base_opts,
+            "cookiefile": cookie_path,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["tv", "web_safari"],
+                }
+            },
+        })
+        attempts.append({
+            **base_opts,
+            "cookiefile": cookie_path,
+            "extractor_args": {
+                "youtube": {
+                    "player_client": ["mweb", "tv_embedded"],
+                }
+            },
+        })
+
+    attempts.append({
+        **base_opts,
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android_vr", "tv_embedded"],
+            }
+        },
+    })
+    attempts.append({
+        **base_opts,
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["ios", "android"],
+            }
+        },
     })
 
     for opts in attempts:
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
-                result = parse_info(info)
-                if result["formats"] or result["direct_url"]:
-                    return result
+                return parse_info(info)
         except Exception as e:
             errors.append(str(e))
 
-    raise HTTPException(status_code=400, detail=" | ".join(errors) or "Could not fetch video")
+    raise HTTPException(status_code=400, detail=" | ".join(errors))
