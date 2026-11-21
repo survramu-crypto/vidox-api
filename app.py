@@ -13,17 +13,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def get_cookie_file():
+    for path in ["cookies.txt", "/etc/secrets/cookies.txt"]:
+        if os.path.exists(path) and os.path.getsize(path) > 0:
+            return path
+    return None
+
 @app.get("/")
 def home():
-    return {"status": "online", "service": "VidoX API"}
+    cookie_path = get_cookie_file()
+    return {
+        "status": "online",
+        "service": "VidoX API",
+        "youtube_cookies_loaded": cookie_path is not None
+    }
 
 @app.get("/info")
 def get_video_info(url: str = Query(..., description="Video URL")):
+    cookie_path = get_cookie_file()
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
     }
+    if cookie_path:
+        ydl_opts["cookiefile"] = cookie_path
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -45,4 +60,3 @@ def get_video_info(url: str = Query(..., description="Video URL")):
             }
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-      
