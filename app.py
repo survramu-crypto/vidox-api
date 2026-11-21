@@ -70,36 +70,13 @@ def get_video_info(url: str = Query(..., description="Video URL")):
             "no_warnings": True,
             "noplaylist": True,
             "cookiefile": cookie_path,
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["tv"],
-                }
-            },
         })
 
     attempts.append({
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android_vr"],
-            }
-        },
     })
-
-    if cookie_path:
-        attempts.append({
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "cookiefile": cookie_path,
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["mweb"],
-                }
-            },
-        })
 
     for opts in attempts:
         try:
