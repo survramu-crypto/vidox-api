@@ -1,5 +1,6 @@
 import os
 import shutil
+import urllib.request
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
@@ -13,6 +14,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def is_pot_server_alive():
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:4416/ping", timeout=2) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
 
 
 def get_cookie_file():
@@ -54,19 +63,17 @@ def parse_info(info):
 
 @app.get("/")
 def home():
-    cookie_path = get_cookie_file()
     return {
         "status": "online",
         "service": "VidoX API",
-        "youtube_cookies_loaded": cookie_path is not None,
+        "pot_server_alive": is_pot_server_alive(),
     }
 
 
 @app.get("/info")
 def get_video_info(url: str = Query(..., description="Video URL")):
-    cookie_path = get_cookie_file()
     errors = []
-    attempts = []
+    is_youtube = "youtube.com" in url or "youtu.be" in url
 
     base_opts = {
         "quiet": True,
@@ -76,42 +83,31 @@ def get_video_info(url: str = Query(..., description="Video URL")):
         "geo_bypass": True,
     }
 
-    if cookie_path:
+    attempts = []
+
+    if is_youtube:
         attempts.append({
             **base_opts,
-            "cookiefile": cookie_path,
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["tv", "web_safari"],
+                    "player_client": ["web", "mweb"],
                 }
             },
         })
+        attempts.append({**base_opts})
         attempts.append({
             **base_opts,
-            "cookiefile": cookie_path,
             "extractor_args": {
                 "youtube": {
                     "player_client": ["mweb", "tv_embedded"],
                 }
             },
         })
-
-    attempts.append({
-        **base_opts,
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android_vr", "tv_embedded"],
-            }
-        },
-    })
-    attempts.append({
-        **base_opts,
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["ios", "android"],
-            }
-        },
-    })
+    else:
+        attempts.append({**base_opts})
+        cookie_path = get_cookie_file()
+        if cookie_path:
+            attempts.append({**base_opts, "cookiefile": cookie_path})
 
     for opts in attempts:
         try:
